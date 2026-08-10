@@ -20,6 +20,12 @@ A production-quality Python SDK for interacting with KSEB (Kerala State Electric
 
 ## Installation
 
+### Using uv (Recommended)
+
+```bash
+uv add git+https://github.com/mujeebcpy/kseb-client.git
+```
+
 ### From Source
 
 ```bash

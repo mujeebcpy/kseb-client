@@ -1,10 +1,16 @@
 # Quick Start Guide
 
-## Setup with `uv`
+## Installation
+
+### Option 1: Install as a Package (Recommended)
+
+```bash
+uv add git+https://github.com/mujeebcpy/kseb-client.git
+```
+
+### Option 2: Setup Local Development
 
 This project uses `uv` for fast, reliable Python package management.
-
-### One-time Setup
 
 ```bash
 cd /home/mujeeb/workspace/kseb-client

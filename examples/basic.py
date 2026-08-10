@@ -25,9 +25,9 @@ def example_basic():
     # Initialize the client
     client = KSEBClient()
 
-    # Consumer details
-    consumer_no = "1145657015077"
-    mobile = "9895672251"
+    # Get consumer details from user input
+    consumer_no = input("Enter consumer number: ").strip()
+    mobile = input("Enter mobile number: ").strip()
 
     try:
         # Get complete grid capacity information
@@ -58,10 +58,12 @@ def example_step_by_step():
     print("Step-by-Step Example")
     print("="*60)
 
+    # Get consumer details from user input
+    consumer_no = input("Enter consumer number: ").strip()
+    mobile = input("Enter mobile number: ").strip()
+
     # Use context manager for automatic cleanup
     with KSEBClient() as client:
-        consumer_no = "1145657015077"
-        mobile = "9895672251"
 
         try:
             # Step 1: Get section information

@@ -23,7 +23,7 @@ A production-quality Python SDK for interacting with KSEB (Kerala State Electric
 ### From Source
 
 ```bash
-git clone https://github.com/your-username/kseb-client.git
+git clone https://github.com/mujeebcpy/kseb-client.git
 cd kseb-client
 pip install -e .
 ```

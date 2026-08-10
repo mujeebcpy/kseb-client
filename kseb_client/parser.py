@@ -174,8 +174,12 @@ def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:
             # Extract connected load
             connected_load = _extract_connected_load(text)
 
-            # Extract tariff
+            # Extract tariff and phase
             tariff = _extract_tariff(text)
+            phase = _extract_phase(text)
+
+            # Extract customer address
+            customer_address = _extract_customer_address(text)
 
             if not dtr:
                 raise KSEBParsingError("DTR information not found in PDF", data_type="PDF")
@@ -187,6 +191,8 @@ def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:
                 dtr=dtr,
                 connected_load=connected_load,
                 tariff=tariff,
+                phase=phase,
+                customer_address=customer_address,
             )
 
             logger.debug(f"Parsed bill: {bill_info}")
@@ -200,18 +206,28 @@ def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:
 
 
 def _extract_consumer_name(text: str) -> str | None:
-    """Extract consumer name from bill text."""
-    # Look for "Consumer Name:" or similar patterns
+    """Extract consumer name from 'Name & Mailing Address' section of bill text."""
+    # Look for "Name & Mailing Address" and get the next line, stopping at CGRF markers (South/Central/North)
+    match = re.search(
+        r"Name\s*&\s*Mailing\s+Address[^\n]*\n\s*([^\n:]+?)(?:\s+(?:South|Central|North):|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        name = match.group(1).strip()
+        if name and len(name) > 2:
+            return name
+
+    # Fallback to alternative patterns if primary pattern doesn't match
     matches = [
         re.search(r"Consumer Name\s*:?\s*([^\n\r]+)", text, re.IGNORECASE),
         re.search(r"Consumners\s*Name\s*:?\s*([^\n\r]+)", text, re.IGNORECASE),
-        re.search(r"Name\s*:?\s*([^\n\r]+)", text, re.IGNORECASE),
     ]
 
     for match in matches:
         if match:
             name = match.group(1).strip()
-            if name and len(name) > 2:  # Avoid short strings that are likely false positives
+            if name and len(name) > 2:
                 return name
 
     return None
@@ -234,17 +250,15 @@ def _extract_section(text: str) -> str | None:
 
 
 def _extract_dtr(text: str) -> str | None:
-    """Extract DTR from bill text."""
+    """Extract DTR from bill text, capturing all data after DTR."""
     match = re.search(
-        r"DTR\s+([^\n\r]+)",
+        r"DTR\s+(.+)",
         text,
         re.IGNORECASE,
     )
     if match:
         dtr = match.group(1).strip()
-        # Remove any trailing garbage
-        dtr = dtr.split()[0] if dtr else None
-        return dtr
+        return dtr if dtr else None
 
     return None
 
@@ -268,12 +282,54 @@ def _extract_connected_load(text: str) -> str | None:
 def _extract_tariff(text: str) -> str | None:
     """Extract tariff from bill text."""
     match = re.search(
-        r"Tariff\s*:?\s*([^\n\r]+)",
+        r"Tariff\s*:?\s*([^\n\r/]+)",
         text,
         re.IGNORECASE,
     )
     if match:
         tariff = match.group(1).strip()
         return tariff
+
+    return None
+
+
+def _extract_phase(text: str) -> str | None:
+    """Extract phase details from bill text."""
+    # Look for phase information in tariff line or separately
+    match = re.search(
+        r"(?:Tariff\s*[:/]?\s*)?Phase\s*:?\s*([^\n\r]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        phase = match.group(1).strip()
+        return phase
+
+    # Also try to extract phase from tariff/phase combined field
+    match = re.search(
+        r"Tariff\s*[:/]\s*Phase\s*:?\s*([^\n\r]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        phase = match.group(1).strip()
+        return phase
+
+    return None
+
+
+def _extract_customer_address(text: str) -> str | None:
+    """Extract customer address following Name & Mailing Address field."""
+    # Look for "Name & Mailing Address" and skip first line (name), then get the address line
+    # Stop at CGRF markers (South/Central/North)
+    match = re.search(
+        r"Name\s*&\s*Mailing\s+Address[^\n]*\n[^\n]+\n\s*([^\n:]+?)(?:\s+(?:South|Central|North):|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        address = match.group(1).strip()
+        if address:
+            return address
 
     return None

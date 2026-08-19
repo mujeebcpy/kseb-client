@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from .constants import BASE_URL, BILL_VIEW_URL, CONTENT_TYPE_PDF, FORM_FIELD_CONSUMER_NO, FORM_FIELD_MOBILE, FORM_FIELD_OKE_KEY, FORM_FIELD_SUBMIT, FORM_SUBMIT_VALUE
 from .exceptions import KSEBAPIError, KSEBAuthenticationError, KSEBBillDownloadError, KSEBParsingError, KSEBValidationError
 from .parser import extract_okey
-from .utils import validate_consumer_no, validate_mobile
+from .utils import validate_consumer_no, validate_mobile, normalize_mobile
 
 if TYPE_CHECKING:
     from .session import KSEBSession
@@ -31,7 +31,7 @@ def download_bill(session: "KSEBSession", consumer_no: str, mobile: str) -> byte
     Args:
         session: KSEBSession instance for making HTTP requests
         consumer_no: KSEB consumer number (13 digits)
-        mobile: Mobile number associated with the consumer (10 digits)
+        mobile: Mobile number associated with the consumer (10 digits or +91 followed by 10 digits)
 
     Returns:
         Bill PDF content as bytes
@@ -41,6 +41,12 @@ def download_bill(session: "KSEBSession", consumer_no: str, mobile: str) -> byte
         KSEBBillDownloadError: If bill download fails
         KSEBParsingError: If OKE key extraction fails
     """
+    # Normalize mobile number (remove +91 if present)
+    try:
+        mobile = normalize_mobile(mobile)
+    except ValueError as e:
+        raise KSEBValidationError(f"Invalid mobile number format: {mobile}") from e
+
     # Validate inputs
     if not validate_consumer_no(consumer_no):
         raise KSEBValidationError(f"Invalid consumer number format: {consumer_no}", field="consumer_no")

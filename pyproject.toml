@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Mujeeb Rahman K", email = "mujeebcpy@wahni.com"}
 ]
 keywords = ["kseb", "kerala", "electricity", "bill", "api", "sdk"]
 classifiers = [
@@ -53,10 +53,10 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-username/kseb-client"
-Repository = "https://github.com/your-username/kseb-client.git"
+Homepage = "https://github.com/mujeebcpy/kseb-client"
+Repository = "https://github.com/mujeebcpy/kseb-client.git"
 Documentation = "https://kseb-client.readthedocs.io"
-Issues = "https://github.com/your-username/kseb-client/issues"
+Issues = "https://github.com/mujeebcpy/kseb-client/issues"
 
 [tool.setuptools]
 packages = ["kseb_client"]

@@ -15,7 +15,7 @@ Installation:
     pip install kseb-client
 
 Documentation:
-    https://github.com/your-username/kseb-client
+    https://github.com/mujeebcpy/kseb-client
 """
 
 from .client import KSEBClient

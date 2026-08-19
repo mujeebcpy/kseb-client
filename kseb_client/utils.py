@@ -28,6 +28,36 @@ def validate_consumer_no(consumer_no: str) -> bool:
     return len(consumer_no) == 13 and consumer_no.isdigit()
 
 
+def normalize_mobile(mobile: str) -> str:
+    """
+    Normalize Indian mobile number by stripping +91 country code if present.
+
+    Args:
+        mobile: Mobile number to normalize (can be 10 digits or +91 followed by 10 digits)
+
+    Returns:
+        Normalized 10-digit mobile number
+
+    Raises:
+        ValueError: If mobile number cannot be normalized to 10 digits
+    """
+    if not mobile or not isinstance(mobile, str):
+        raise ValueError("Mobile number must be a non-empty string")
+
+    mobile = mobile.strip()
+
+    # Remove +91 prefix if present
+    if mobile.startswith("+91"):
+        mobile = mobile[3:]
+    elif mobile.startswith("91"):
+        # Also handle 91 prefix without +
+        if len(mobile) == 12:  # 91 + 10 digits
+            mobile = mobile[2:]
+
+    # Return the remaining digits
+    return mobile
+
+
 def validate_mobile(mobile: str) -> bool:
     """
     Validate Indian mobile number format.

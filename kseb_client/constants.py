@@ -32,4 +32,4 @@ CONTENT_TYPE_PDF = "application/pdf"
 CONTENT_TYPE_JSON = "application/json"
 
 # HTTP Headers
-USER_AGENT = "KSEB-Client/1.0 (+https://github.com/your-username/kseb-client)"
+USER_AGENT = "KSEB-Client/1.0 (+https://github.com/mujeebcpy/kseb-client)"

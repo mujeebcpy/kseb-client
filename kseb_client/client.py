@@ -20,7 +20,7 @@ from .parser import parse_bill_pdf
 from .section import get_section
 from .session import KSEBSession
 from .transformer import find_transformer, get_transformers
-from .utils import extract_section_code, validate_consumer_no, validate_mobile
+from .utils import extract_section_code, validate_consumer_no, validate_mobile, normalize_mobile
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ class KSEBClient:
 
         Args:
             consumer_no: KSEB consumer number (13 digits)
-            mobile: Mobile number associated with the consumer (10 digits)
+            mobile: Mobile number associated with the consumer (10 digits or +91 followed by 10 digits)
 
         Returns:
             GridCapacityResult with section, bill, and transformer info
@@ -190,6 +190,12 @@ class KSEBClient:
             KSEBValidationError: If inputs are invalid
             KSEBClientError: If any step fails
         """
+        # Normalize mobile number (remove +91 if present)
+        try:
+            mobile = normalize_mobile(mobile)
+        except ValueError as e:
+            raise KSEBValidationError(f"Invalid mobile number: {mobile}") from e
+
         # Validate inputs
         if not validate_consumer_no(consumer_no):
             raise KSEBValidationError(f"Invalid consumer number: {consumer_no}")

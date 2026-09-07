@@ -38,6 +38,8 @@ class BillInfo:
     tariff: str | None = None
     phase: str | None = None
     customer_address: str | None = None
+    security_deposit: float | None = None
+    net_payable: float | None = None
 
     def __str__(self) -> str:
         return f"BillInfo(consumer_no={self.consumer_no}, consumer_name={self.consumer_name}, dtr={self.dtr})"

@@ -171,8 +171,9 @@ def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:
             # Extract DTR
             dtr = _extract_dtr(text)
 
-            # Extract connected load
+            # Extract connected load, security deposit
             connected_load = _extract_connected_load(text)
+            security_deposit = _extract_security_deposit(text)
 
             # Extract tariff and phase
             tariff = _extract_tariff(text)
@@ -180,6 +181,9 @@ def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:
 
             # Extract customer address
             customer_address = _extract_customer_address(text)
+
+            #Extract Bill Amount 
+            net_payable = _extract_net_payable(text)
 
             if not dtr:
                 raise KSEBParsingError("DTR information not found in PDF", data_type="PDF")
@@ -189,10 +193,13 @@ def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:
                 consumer_name=consumer_name or "Unknown",
                 section=section or "Unknown",
                 dtr=dtr,
-                connected_load=connected_load,
                 tariff=tariff,
                 phase=phase,
                 customer_address=customer_address,
+                connected_load=connected_load,
+                net_payable=net_payable,
+                security_deposit=security_deposit
+                
             )
 
             logger.debug(f"Parsed bill: {bill_info}")
@@ -266,8 +273,16 @@ def _extract_dtr(text: str) -> str | None:
 def _extract_connected_load(text: str) -> str | None:
     """Extract connected load from bill text."""
     matches = [
-        re.search(r"Connected Load\s*:?\s*([^\n\r]+)", text, re.IGNORECASE),
-        re.search(r"CT Ratio\s*:?\s*([^\n\r]+)", text, re.IGNORECASE),
+        re.search(
+            r"Connected Load\s*:?\s*([\d,.]+\s*Watts)",
+            text,
+            re.IGNORECASE,
+        ),
+        re.search(
+            r"CT Ratio\s*:?\s*([\d,.]+\s*Watts)",
+            text,
+            re.IGNORECASE,
+        ),
     ]
 
     for match in matches:
@@ -278,6 +293,35 @@ def _extract_connected_load(text: str) -> str | None:
 
     return None
 
+def _extract_security_deposit(text: str) -> str | None:
+    """Extract security deposit from bill text."""
+    match = re.search(
+        r"Security\s+Deposit\s+Rs\.?\s*([\d,.]+)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+        deposit = match.group(1).strip()
+        if deposit:
+            return deposit
+
+    return None
+
+def _extract_net_payable(text: str) -> str | None:
+    """Extract net payable amount from bill text."""
+    match = re.search(
+        r"Net\s+Payable\s*\(e\+f\+g\+h\+i-j-k\)\s*([\d,.]+)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+        amount = match.group(1).strip()
+        if amount:
+            return amount
+
+    return None
 
 def _extract_tariff(text: str) -> str | None:
     """Extract tariff from bill text."""

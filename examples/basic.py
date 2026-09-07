@@ -41,6 +41,10 @@ def example_basic():
         print(f"  DTR: {result.transformer.transformer_name}")
         print(f"  Available Balance: {result.transformer.balance_available} kW")
         print(f"  Division: {result.transformer.division}")
+        print(f" Connected Load: {result.bill.connected_load}")
+        print(f" Security Deposit: {result.bill.security_deposit}")
+        print(f" Net Payable: {result.bill.net_payable}")
+
 
     except KSEBValidationError as e:
         print(f"✗ Validation Error: {e}")

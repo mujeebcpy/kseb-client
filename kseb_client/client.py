@@ -6,6 +6,7 @@ This module provides the primary public interface for interacting with KSEB APIs
 
 import logging
 import time
+from difflib import SequenceMatcher
 from typing import Optional
 
 from .bill import download_bill
@@ -15,12 +16,25 @@ from .exceptions import (
     KSEBTransformerNotFoundError,
     KSEBValidationError,
 )
-from .models import BillInfo, GridCapacityResult, SectionInfo, Transformer
+from .models import (
+    BillInfo,
+    GridCapacityOptionsResult,
+    GridCapacityResult,
+    SectionInfo,
+    Transformer,
+    TransformerCaptcha,
+)
 from .parser import parse_bill_pdf
 from .section import get_section
 from .session import KSEBSession
-from .transformer import find_transformer, get_transformers
-from .utils import extract_section_code, validate_consumer_no, validate_mobile, normalize_mobile
+from .transformer import find_transformer, get_transformer_captcha, get_transformers
+from .utils import (
+    extract_section_code,
+    normalize_mobile,
+    normalize_transformer_name,
+    validate_consumer_no,
+    validate_mobile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +130,19 @@ class KSEBClient:
 
         return parse_bill_pdf(pdf_bytes, consumer_no)
 
-    def get_transformers(self, section_code: str, use_cache: bool = True, section_info: Optional[SectionInfo] = None) -> list[Transformer]:
+    def get_transformer_captcha(self) -> TransformerCaptcha:
+        """Fetch a CAPTCHA challenge needed to request transformer data."""
+        return get_transformer_captcha(self._session)
+
+    def get_transformers(
+        self,
+        section_code: str,
+        use_cache: bool = True,
+        section_info: Optional[SectionInfo] = None,
+        *,
+        captcha_code: Optional[str] = None,
+        unique_id: Optional[str] = None,
+    ) -> list[Transformer]:
         """
         Get list of available transformers for a section.
 
@@ -126,6 +152,8 @@ class KSEBClient:
             section_code: Section code (4-digit code)
             use_cache: Whether to use cached results. Defaults to True.
             section_info: Optional SectionInfo to enrich transformer data with division/subdivision
+            captcha_code: CAPTCHA answer entered by the user (required on cache miss)
+            unique_id: Unique ID from get_transformer_captcha() (required on cache miss)
 
         Returns:
             List of Transformer objects
@@ -142,14 +170,28 @@ class KSEBClient:
                 return transformers
 
         # Fetch from API
-        transformers = get_transformers(self._session, section_code, section_info)
+        if not captcha_code or not unique_id:
+            raise KSEBValidationError(
+                "captcha_code and unique_id are required to fetch transformers",
+                field="captcha_code",
+            )
+        transformers = get_transformers(
+            self._session,
+            section_code,
+            section_info,
+            captcha_code=captcha_code,
+            unique_id=unique_id,
+        )
 
         # Cache the result
         self._transformer_cache[section_code] = (transformers, time.time())
 
         return transformers
 
-    def find_transformer(self, section_code: str, transformer_name: str) -> Transformer:
+    def find_transformer(
+        self, section_code: str, transformer_name: str, *,
+        captcha_code: str, unique_id: str,
+    ) -> Transformer:
         """
         Find a specific transformer by name.
 
@@ -165,9 +207,19 @@ class KSEBClient:
             KSEBTransformerNotFoundError: If transformer not found
             KSEBClientError: If request fails
         """
-        return find_transformer(self._session, section_code, transformer_name)
+        return find_transformer(
+            self._session, section_code, transformer_name,
+            captcha_code=captcha_code, unique_id=unique_id,
+        )
 
-    def get_grid_capacity(self, consumer_no: str, mobile: str) -> GridCapacityResult:
+    def get_grid_capacity(
+        self,
+        consumer_no: str,
+        mobile: str,
+        *,
+        captcha_code: Optional[str] = None,
+        unique_id: Optional[str] = None,
+    ) -> GridCapacityResult:
         """
         High-level helper to get complete grid capacity information.
 
@@ -223,12 +275,39 @@ class KSEBClient:
 
             # Step 4: Get transformers
             logger.debug("Step 4: Fetching transformer list")
-            transformers = self.get_transformers(section_code, use_cache=True, section_info=section_info)
+            transformers = self.get_transformers(
+                section_code,
+                use_cache=True,
+                section_info=section_info,
+                captcha_code=captcha_code,
+                unique_id=unique_id,
+            )
 
             # Step 5: Find matching transformer
             logger.debug(f"Step 5: Finding transformer: {bill_info.dtr}")
             try:
-                transformer = self.find_transformer(section_code, bill_info.dtr)
+                requested_name = normalize_transformer_name(bill_info.dtr)
+                transformer = next(
+                    (item for item in transformers if normalize_transformer_name(item.transformer_name) == requested_name),
+                    None,
+                )
+                if transformer is None and transformers:
+                    best_match = max(
+                        transformers,
+                        key=lambda item: SequenceMatcher(
+                            None, requested_name, normalize_transformer_name(item.transformer_name)
+                        ).ratio(),
+                    )
+                    if SequenceMatcher(
+                        None, requested_name, normalize_transformer_name(best_match.transformer_name)
+                    ).ratio() >= 0.6:
+                        transformer = best_match
+                if transformer is None:
+                    raise KSEBTransformerNotFoundError(
+                        f"Transformer not found: {bill_info.dtr}",
+                        transformer_name=bill_info.dtr,
+                        section_code=section_code,
+                    )
             except KSEBTransformerNotFoundError:
                 logger.warning(
                     f"Exact transformer match not found for {bill_info.dtr}. "
@@ -251,6 +330,34 @@ class KSEBClient:
         except Exception as e:
             logger.error(f"Grid capacity query failed: {e}")
             raise KSEBClientError(f"Grid capacity query failed: {str(e)}") from e
+
+    def get_grid_capacity_options(
+        self, consumer_no: str, *, captcha_code: str, unique_id: str
+    ) -> GridCapacityOptionsResult:
+        """Get section details and all available transformer capacity options.
+
+        This bill-free fallback is useful when the bill service is unavailable and
+        an application needs to let a user select the correct transformer.
+        """
+        if not validate_consumer_no(consumer_no):
+            raise KSEBValidationError(f"Invalid consumer number: {consumer_no}")
+
+        try:
+            section_code = extract_section_code(consumer_no)
+            section_info = self.get_section(consumer_no)
+            transformers = self.get_transformers(
+                section_code,
+                use_cache=True,
+                section_info=section_info,
+                captcha_code=captcha_code,
+                unique_id=unique_id,
+            )
+            return GridCapacityOptionsResult(section=section_info, transformers=transformers)
+        except KSEBClientError:
+            raise
+        except Exception as e:
+            logger.error("Grid capacity options lookup failed: %s", e)
+            raise KSEBClientError(f"Grid capacity lookup failed: {str(e)}") from e
 
     def clear_cache(self) -> None:
         """Clear the transformer cache."""

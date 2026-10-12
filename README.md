@@ -151,13 +151,17 @@ print(bill.tariff)           # Tariff category
 
 ---
 
-##### `get_transformers(section_code: str, use_cache: bool = True) -> list[Transformer]`
+##### `get_transformers(section_code: str, use_cache: bool = True, *, captcha_code: str, unique_id: str) -> list[Transformer]`
 
 Get available transformers for a section.
 
 ```python
 # Results are cached by default (15 minutes)
-transformers = client.get_transformers("1234")
+captcha = client.get_transformer_captcha()
+captcha_code = input("Captcha: ").strip()
+transformers = client.get_transformers(
+    "1234", captcha_code=captcha_code, unique_id=captcha.unique_id
+)
 
 for dtr in transformers:
     print(f"{dtr.transformer_name}: {dtr.balance_available} kW available")
@@ -172,12 +176,16 @@ for dtr in transformers:
 
 ---
 
-##### `find_transformer(section_code: str, transformer_name: str) -> Transformer`
+##### `find_transformer(section_code: str, transformer_name: str, *, captcha_code: str, unique_id: str) -> Transformer`
 
 Find a specific transformer by name.
 
 ```python
-dtr = client.find_transformer("1234", "DTR-001")
+captcha = client.get_transformer_captcha()
+captcha_code = input("Captcha: ").strip()
+dtr = client.find_transformer(
+    "1234", "DTR-001", captcha_code=captcha_code, unique_id=captcha.unique_id
+)
 print(f"Balance: {dtr.balance_available} kW")
 print(f"Allowed Capacity: {dtr.allowed_cap} kW")
 ```
@@ -215,6 +223,30 @@ print(f"Available: {result.transformer.balance_available} kW")
 
 **Raises:**
 - Any exception from underlying operations
+
+##### `get_grid_capacity_options(consumer_no: str, *, captcha_code: str, unique_id: str) -> GridCapacityOptionsResult`
+
+Bill-free fallback for when bill download is unavailable. It fetches section details
+and every transformer available in that section, so an application can let the user
+search and choose one. It returns no bill-derived address or consumer details.
+
+```python
+captcha = client.get_transformer_captcha()
+# Display captcha.image (PNG/JPEG bytes) in your application and ask the user to solve it.
+captcha_code = input("Captcha: ").strip()
+result = client.get_grid_capacity_options(
+    "1145657015077",
+    captcha_code=captcha_code,
+    unique_id=captcha.unique_id,
+)
+print(result.section.section)
+for transformer in result.transformers:
+    print(transformer.transformer_name, transformer.balance_available)
+```
+
+The result contains `section` and `transformers` fields. Use the selected transformer's
+capacity values from this list in your application. Fetch and submit the CAPTCHA using
+the same `KSEBClient` instance so its session cookies are retained.
 
 ---
 
@@ -507,10 +539,16 @@ except Exception as e:
 
 ```python
 # Use cache (default)
-transformers = client.get_transformers("1234")
+captcha = client.get_transformer_captcha()
+transformers = client.get_transformers(
+    "1234", captcha_code=input("Captcha: ").strip(), unique_id=captcha.unique_id
+)
 
 # Bypass cache
-transformers = client.get_transformers("1234", use_cache=False)
+captcha = client.get_transformer_captcha()
+transformers = client.get_transformers(
+    "1234", use_cache=False, captcha_code=input("Captcha: ").strip(), unique_id=captcha.unique_id
+)
 
 # Clear cache manually
 client.clear_cache()

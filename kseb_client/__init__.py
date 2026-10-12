@@ -30,7 +30,14 @@ from .exceptions import (
     KSEBTransformerNotFoundError,
     KSEBValidationError,
 )
-from .models import BillInfo, GridCapacityResult, SectionInfo, Transformer
+from .models import (
+    BillInfo,
+    GridCapacityOptionsResult,
+    GridCapacityResult,
+    SectionInfo,
+    Transformer,
+    TransformerCaptcha,
+)
 
 __version__ = "1.0.0"
 __author__ = "Your Name"
@@ -41,7 +48,9 @@ __all__ = [
     "SectionInfo",
     "BillInfo",
     "Transformer",
+    "TransformerCaptcha",
     "GridCapacityResult",
+    "GridCapacityOptionsResult",
     # Exceptions
     "KSEBClientError",
     "KSEBAPIError",

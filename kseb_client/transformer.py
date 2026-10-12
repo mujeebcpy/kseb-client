@@ -5,11 +5,13 @@ This module handles fetching and matching transformer details.
 """
 
 import logging
+import re
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Optional
 
-from .constants import DTR_AVAILABLE_URL
+from .constants import DTR_AVAILABLE_URL, TRANSFORMER_CAPTCHA_URL, TRANSFORMER_UNIQUE_ID_URL
 from .exceptions import KSEBAPIError, KSEBParsingError, KSEBTransformerNotFoundError, KSEBValidationError
-from .models import SectionInfo, Transformer
+from .models import SectionInfo, Transformer, TransformerCaptcha
 from .utils import extract_section_code, normalize_transformer_name, parse_capacity_value, validate_consumer_no
 
 if TYPE_CHECKING:
@@ -18,7 +20,62 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_transformers(session: "KSEBSession", section_code: str, section_info: Optional[SectionInfo] = None) -> list[Transformer]:
+def get_transformer_captcha(session: "KSEBSession") -> TransformerCaptcha:
+    """Fetch a CAPTCHA image and its unique ID for transformer lookup."""
+    try:
+        response = session.post(TRANSFORMER_UNIQUE_ID_URL)
+        if response.status_code != 200:
+            raise KSEBAPIError(
+                "Unique ID request failed", status_code=response.status_code,
+                response=response.text[:500],
+            )
+        unique_id = _extract_unique_id(response)
+        image_response = session.get(TRANSFORMER_CAPTCHA_URL, params={"uniqId": unique_id})
+        if not image_response.content:
+            raise KSEBParsingError("Captcha image response was empty", data_type="image")
+        return TransformerCaptcha(
+            unique_id=unique_id,
+            image=image_response.content,
+            content_type=image_response.headers.get("Content-Type"),
+        )
+    except (KSEBAPIError, KSEBParsingError):
+        raise
+    except Exception as e:
+        raise KSEBAPIError(f"Failed to fetch transformer captcha: {e}") from e
+
+
+def _extract_unique_id(response) -> str:
+    """Accept the unique ID returned as plain text, JSON, or HTML input."""
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        for key in ("uniqueId", "uniqId", "unique_id", "id"):
+            if data.get(key) is not None:
+                return str(data[key]).strip()
+    elif isinstance(data, (str, int)):
+        value = str(data).strip().strip('"')
+        if value:
+            return value
+
+    body = response.text.strip()
+    if body.isdigit():
+        return body
+    match = re.search(r"(?:uniqueId|uniqId|unique_id)\s*[=:]\s*[\"']?([A-Za-z0-9_-]+)", body, re.I)
+    if match:
+        return match.group(1)
+    raise KSEBParsingError("Could not find unique ID in response", data_type="JSON/text")
+
+
+def get_transformers(
+    session: "KSEBSession",
+    section_code: str,
+    section_info: Optional[SectionInfo] = None,
+    *,
+    captcha_code: str,
+    unique_id: str,
+) -> list[Transformer]:
     """
     Fetch list of available transformers for a section.
 
@@ -26,6 +83,8 @@ def get_transformers(session: "KSEBSession", section_code: str, section_info: Op
         session: KSEBSession instance for making HTTP requests
         section_code: Section code (4-digit code extracted from consumer number)
         section_info: Optional SectionInfo to enrich transformer data with division/subdivision
+        captcha_code: User-entered CAPTCHA answer
+        unique_id: ID returned with the CAPTCHA challenge
 
     Returns:
         List of Transformer objects
@@ -39,12 +98,19 @@ def get_transformers(session: "KSEBSession", section_code: str, section_info: Op
         raise KSEBValidationError(
             f"Invalid section code format: {section_code}", field="section_code"
         )
+    if not isinstance(captcha_code, str) or not captcha_code.strip():
+        raise KSEBValidationError("Captcha answer is required", field="captcha_code")
+    if not isinstance(unique_id, str) or not unique_id.strip():
+        raise KSEBValidationError("Captcha unique ID is required", field="unique_id")
 
     logger.debug(f"Fetching transformers for section: {section_code}")
 
     try:
         # Make API request
-        response = session.post(DTR_AVAILABLE_URL, data={"sectionId": section_code})
+        response = session.post(
+            DTR_AVAILABLE_URL,
+            data={"sectionId": section_code, "code": captcha_code.strip(), "uniqueId": unique_id.strip()},
+        )
 
         # Check response status
         if response.status_code != 200:
@@ -62,10 +128,17 @@ def get_transformers(session: "KSEBSession", section_code: str, section_info: Op
                 f"Failed to parse transformer API response: {str(e)}", data_type="JSON"
             ) from e
 
+        # The endpoint reports CAPTCHA failures inside an HTTP 200 JSON response.
+        if isinstance(data, dict) and data.get("err_flag") == "1":
+            message = data.get("messageCd") or "Transformer lookup was rejected"
+            raise KSEBAPIError(str(message), response=response.text[:500])
+
         # Extract transformer list
-        if "list" not in data:
-            logger.warning(f"No transformers found for section: {section_code}")
-            return []
+        if not isinstance(data, dict) or "list" not in data:
+            raise KSEBAPIError(
+                "Transformer response did not include a list",
+                response=response.text[:500],
+            )
 
         transformers_data = data.get("list", [])
 
@@ -93,7 +166,10 @@ def get_transformers(session: "KSEBSession", section_code: str, section_info: Op
         raise KSEBAPIError(f"Failed to get transformers: {str(e)}") from e
 
 
-def find_transformer(session: "KSEBSession", section_code: str, transformer_name: str) -> Transformer:
+def find_transformer(
+    session: "KSEBSession", section_code: str, transformer_name: str,
+    *, captcha_code: str, unique_id: str,
+) -> Transformer:
     """
     Find a specific transformer by name in a section.
 
@@ -121,13 +197,26 @@ def find_transformer(session: "KSEBSession", section_code: str, transformer_name
     logger.debug(f"Finding transformer: {transformer_name} in section: {section_code}")
 
     # Get all transformers for the section
-    transformers = get_transformers(session, section_code)
+    transformers = get_transformers(
+        session, section_code, captcha_code=captcha_code, unique_id=unique_id
+    )
 
-    # Search for matching transformer
+    # Prefer exact normalized matches, then accept the closest sufficiently similar name.
     for transformer in transformers:
         if normalize_transformer_name(transformer.transformer_name) == normalized_name:
             logger.info(f"Found transformer: {transformer.transformer_name}")
             return transformer
+
+    def similarity(candidate: Transformer) -> float:
+        candidate_name = normalize_transformer_name(candidate.transformer_name)
+        return SequenceMatcher(None, normalized_name, candidate_name).ratio()
+
+    if transformers:
+        best_match = max(transformers, key=similarity)
+        score = similarity(best_match)
+        if score >= 0.6:
+            logger.info("Matched transformer %r to %r (similarity %.2f)", transformer_name, best_match.transformer_name, score)
+            return best_match
 
     # Not found
     raise KSEBTransformerNotFoundError(

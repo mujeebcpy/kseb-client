@@ -76,3 +76,20 @@ class GridCapacityResult:
             f"consumer={self.bill.consumer_name}, "
             f"balance={self.transformer.balance_available})"
         )
+
+
+@dataclass
+class GridCapacityOptionsResult:
+    """Section details and transformer choices when bill parsing is unavailable."""
+
+    section: SectionInfo
+    transformers: list[Transformer]
+
+
+@dataclass
+class TransformerCaptcha:
+    """Captcha challenge required by the transformer lookup endpoint."""
+
+    unique_id: str
+    image: bytes
+    content_type: str | None = None

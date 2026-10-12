@@ -10,6 +10,8 @@ BASE_URL = "https://old.kseb.in/billview/"
 BILL_VIEW_URL = f"{BASE_URL}index.php"
 SECTION_URL = "https://kseb.in/knowursectiondetail"
 DTR_AVAILABLE_URL = "https://wss.kseb.in/selfservices/getDTRAvailable"
+TRANSFORMER_UNIQUE_ID_URL = "https://wss.kseb.in/selfservices/getUniqueId"
+TRANSFORMER_CAPTCHA_URL = "https://wss.kseb.in/selfservices/captchaImg.image"
 
 # HTTP Configuration
 DEFAULT_TIMEOUT = 15  # seconds

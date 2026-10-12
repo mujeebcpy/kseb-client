@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kseb-client"
-version = "1.0.0"
+version = "1.1.0"
 description = "Production-quality Python SDK for KSEB (Kerala State Electricity Board) web services"
 readme = "README.md"
 license = {text = "MIT"}

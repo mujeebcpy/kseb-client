@@ -92,12 +92,27 @@ def example_step_by_step():
             # Step 4: Get transformers
             print("\n4. Fetching transformer list...")
             section_code = consumer_no[2:6]
-            transformers = client.get_transformers(section_code)
+            captcha = client.get_transformer_captcha()
+            captcha_path = "kseb_transformer_captcha.png"
+            with open(captcha_path, "wb") as captcha_file:
+                captcha_file.write(captcha.image)
+            print(f"   Solve the captcha in {captcha_path}")
+            transformers = client.get_transformers(
+                section_code,
+                captcha_code=input("Captcha: ").strip(),
+                unique_id=captcha.unique_id,
+            )
             print(f"   ✓ Found {len(transformers)} transformers")
 
             # Step 5: Find specific transformer
             print(f"\n5. Finding transformer: {bill.dtr}...")
-            dtr = client.find_transformer(section_code, bill.dtr)
+            dtr = next(
+                (item for item in transformers if item.transformer_name.strip().upper() == bill.dtr.strip().upper()),
+                None,
+            )
+            if dtr is None:
+                print("   Transformer name was not an exact match; choose from the list above.")
+                return
             print(f"   ✓ Transformer: {dtr.transformer_name}")
             print(f"   ✓ Available Balance: {dtr.balance_available} kW")
             print(f"   ✓ Allowed Capacity: {dtr.allowed_cap} kW")
@@ -151,7 +166,15 @@ def example_with_caching():
 
     try:
         print(f"\n1. First call to get_transformers (will fetch from API)...")
-        transformers1 = client.get_transformers(section_code)
+        captcha = client.get_transformer_captcha()
+        captcha_path = "kseb_transformer_captcha.png"
+        with open(captcha_path, "wb") as captcha_file:
+            captcha_file.write(captcha.image)
+        print(f"Solve the captcha in {captcha_path}")
+        captcha_code = input("Captcha: ").strip()
+        transformers1 = client.get_transformers(
+            section_code, captcha_code=captcha_code, unique_id=captcha.unique_id
+        )
         print(f"   ✓ Got {len(transformers1)} transformers")
 
         print(f"\n2. Second call to get_transformers (will use cache)...")
@@ -159,7 +182,17 @@ def example_with_caching():
         print(f"   ✓ Got {len(transformers2)} transformers (from cache)")
 
         print(f"\n3. Third call with use_cache=False (will fetch from API)...")
-        transformers3 = client.get_transformers(section_code, use_cache=False)
+        captcha = client.get_transformer_captcha()
+        captcha_path = "kseb_transformer_captcha.png"
+        with open(captcha_path, "wb") as captcha_file:
+            captcha_file.write(captcha.image)
+        print(f"Solve the captcha in {captcha_path}")
+        transformers3 = client.get_transformers(
+            section_code,
+            use_cache=False,
+            captcha_code=input("Captcha: ").strip(),
+            unique_id=captcha.unique_id,
+        )
         print(f"   ✓ Got {len(transformers3)} transformers (fresh from API)")
 
         print(f"\n4. Clear cache...")

@@ -58,6 +58,12 @@ class KSEBBillDownloadError(KSEBClientError):
     pass
 
 
+class KSEBCaptchaError(KSEBClientError):
+    """Raised when KSEB rejects a captcha answer (wrong or expired)."""
+
+    pass
+
+
 class KSEBTransformerNotFoundError(KSEBClientError):
     """Raised when a transformer cannot be found in the available list."""
 

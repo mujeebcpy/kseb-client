@@ -5,12 +5,13 @@ This module handles fetching and matching transformer details.
 """
 
 import logging
-import re
+import secrets
+import time
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Optional
 
-from .constants import DTR_AVAILABLE_URL, TRANSFORMER_CAPTCHA_URL, TRANSFORMER_UNIQUE_ID_URL
-from .exceptions import KSEBAPIError, KSEBParsingError, KSEBTransformerNotFoundError, KSEBValidationError
+from .constants import DTR_AVAILABLE_URL, TRANSFORMER_CAPTCHA_URL
+from .exceptions import KSEBAPIError, KSEBCaptchaError, KSEBParsingError, KSEBTransformerNotFoundError, KSEBValidationError
 from .models import SectionInfo, Transformer, TransformerCaptcha
 from .utils import extract_section_code, normalize_transformer_name, parse_capacity_value, validate_consumer_no
 
@@ -21,15 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 def get_transformer_captcha(session: "KSEBSession") -> TransformerCaptcha:
-    """Fetch a CAPTCHA image and its unique ID for transformer lookup."""
+    """Fetch a CAPTCHA image and its unique ID for transformer lookup.
+
+    The unique ID is generated client-side, as the KSEB website does; the server
+    stores the CAPTCHA answer under it. The ID returned by ``getUniqueId`` is a
+    constant and must not be used.
+    """
     try:
-        response = session.post(TRANSFORMER_UNIQUE_ID_URL)
-        if response.status_code != 200:
-            raise KSEBAPIError(
-                "Unique ID request failed", status_code=response.status_code,
-                response=response.text[:500],
-            )
-        unique_id = _extract_unique_id(response)
+        unique_id = _generate_unique_id()
         image_response = session.get(TRANSFORMER_CAPTCHA_URL, params={"uniqId": unique_id})
         if not image_response.content:
             raise KSEBParsingError("Captcha image response was empty", data_type="image")
@@ -44,28 +44,9 @@ def get_transformer_captcha(session: "KSEBSession") -> TransformerCaptcha:
         raise KSEBAPIError(f"Failed to fetch transformer captcha: {e}") from e
 
 
-def _extract_unique_id(response) -> str:
-    """Accept the unique ID returned as plain text, JSON, or HTML input."""
-    try:
-        data = response.json()
-    except ValueError:
-        data = None
-    if isinstance(data, dict):
-        for key in ("uniqueId", "uniqId", "unique_id", "id"):
-            if data.get(key) is not None:
-                return str(data[key]).strip()
-    elif isinstance(data, (str, int)):
-        value = str(data).strip().strip('"')
-        if value:
-            return value
-
-    body = response.text.strip()
-    if body.isdigit():
-        return body
-    match = re.search(r"(?:uniqueId|uniqId|unique_id)\s*[=:]\s*[\"']?([A-Za-z0-9_-]+)", body, re.I)
-    if match:
-        return match.group(1)
-    raise KSEBParsingError("Could not find unique ID in response", data_type="JSON/text")
+def _generate_unique_id() -> str:
+    """Build a CAPTCHA ID the way the KSEB website does (ms timestamp + random)."""
+    return str(int(time.time() * 1000) + secrets.randbelow(10000) + 10000)
 
 
 def get_transformers(
@@ -130,8 +111,10 @@ def get_transformers(
 
         # The endpoint reports CAPTCHA failures inside an HTTP 200 JSON response.
         if isinstance(data, dict) and data.get("err_flag") == "1":
-            message = data.get("messageCd") or "Transformer lookup was rejected"
-            raise KSEBAPIError(str(message), response=response.text[:500])
+            message = str(data.get("messageCd") or "Transformer lookup was rejected")
+            if "verification code" in message.lower() or "captcha" in message.lower():
+                raise KSEBCaptchaError(message)
+            raise KSEBAPIError(message, response=response.text[:500])
 
         # Extract transformer list
         if not isinstance(data, dict) or "list" not in data:
@@ -159,7 +142,7 @@ def get_transformers(
         logger.info(f"Retrieved {len(transformers)} transformers for section {section_code}")
         return transformers
 
-    except (KSEBValidationError, KSEBAPIError, KSEBParsingError):
+    except (KSEBValidationError, KSEBAPIError, KSEBParsingError, KSEBCaptchaError):
         raise
     except Exception as e:
         logger.error(f"Unexpected error fetching transformers: {e}")

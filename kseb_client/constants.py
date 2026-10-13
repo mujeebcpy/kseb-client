@@ -6,11 +6,11 @@ used throughout the SDK.
 """
 
 # API Endpoints
-BASE_URL = "https://old.kseb.in/billview/"
-BILL_VIEW_URL = f"{BASE_URL}index.php"
+BILL_CAPTCHA_URL = "https://kseb.in/captcha/default"
+BILL_DETAIL_URL = "https://kseb.in/knowyourbilldetail"
+BILL_SESSION_COOKIE = "kseb_session"
 SECTION_URL = "https://kseb.in/knowursectiondetail"
 DTR_AVAILABLE_URL = "https://wss.kseb.in/selfservices/getDTRAvailable"
-TRANSFORMER_UNIQUE_ID_URL = "https://wss.kseb.in/selfservices/getUniqueId"
 TRANSFORMER_CAPTCHA_URL = "https://wss.kseb.in/selfservices/captchaImg.image"
 
 # HTTP Configuration
@@ -24,10 +24,8 @@ CACHE_KEY_TRANSFORMERS = "transformers:{section_code}"
 
 # Form Field Names
 FORM_FIELD_CONSUMER_NO = "consumerno"
-FORM_FIELD_MOBILE = "regmobno"
-FORM_FIELD_OKE_KEY = "okey"
-FORM_FIELD_SUBMIT = "b_submit_0"
-FORM_SUBMIT_VALUE = "View Bill"
+FORM_FIELD_MOBILE = "mobileno"
+FORM_FIELD_CAPTCHA = "captcha"
 
 # Response Content Types
 CONTENT_TYPE_PDF = "application/pdf"

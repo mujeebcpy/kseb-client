@@ -10,7 +10,6 @@ from io import BytesIO
 from typing import Any
 
 import pdfplumber
-from bs4 import BeautifulSoup
 
 from .exceptions import KSEBParsingError
 from .models import BillInfo
@@ -105,37 +104,6 @@ def parse_section_html(html: str) -> dict[str, str | None]:
     except Exception as e:
         logger.error(f"Failed to parse section HTML: {e}")
         raise KSEBParsingError(f"Failed to parse section details: {str(e)}", data_type="HTML") from e
-
-
-def extract_okey(html: str) -> str:
-    """
-    Extract the OKE key from bill view page HTML.
-
-    Args:
-        html: HTML content of the bill view page
-
-    Returns:
-        OKE key value
-
-    Raises:
-        KSEBParsingError: If OKE key cannot be found
-    """
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        okey_input = soup.find("input", {"name": "okey"})
-
-        if okey_input is None or "value" not in okey_input.attrs:
-            raise KSEBParsingError("Cannot find OKE key in page", data_type="HTML")
-
-        okey = okey_input["value"]
-        logger.debug(f"Extracted OKE key: {okey[:10]}..." if len(str(okey)) > 10 else f"Extracted OKE key: {okey}")
-        return str(okey)
-
-    except KSEBParsingError:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to extract OKE key: {e}")
-        raise KSEBParsingError(f"Failed to extract OKE key: {str(e)}", data_type="HTML") from e
 
 
 def parse_bill_pdf(pdf_bytes: bytes, consumer_no: str) -> BillInfo:

@@ -51,7 +51,6 @@ uv run python3 examples/basic.py
 
 All auto-installed by `uv sync`:
 - `requests` - HTTP client
-- `beautifulsoup4` - HTML parsing
 - `pdfplumber` - PDF text extraction
 - `urllib3` - URL utilities
 

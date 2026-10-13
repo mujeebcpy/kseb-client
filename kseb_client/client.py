@@ -9,7 +9,7 @@ import time
 from difflib import SequenceMatcher
 from typing import Optional
 
-from .bill import download_bill
+from .bill import download_bill, get_bill_captcha
 from .constants import DEFAULT_CACHE_TTL
 from .exceptions import (
     KSEBClientError,
@@ -17,6 +17,7 @@ from .exceptions import (
     KSEBValidationError,
 )
 from .models import (
+    BillCaptcha,
     BillInfo,
     GridCapacityOptionsResult,
     GridCapacityResult,
@@ -93,22 +94,33 @@ class KSEBClient:
         """
         return get_section(self._session, consumer_no)
 
-    def download_bill(self, consumer_no: str, mobile: str) -> bytes:
+    def get_bill_captcha(self) -> BillCaptcha:
+        """Fetch a CAPTCHA challenge needed to download a bill."""
+        return get_bill_captcha(self._session)
+
+    def download_bill(
+        self, consumer_no: str, mobile: str, *, captcha_code: str, session_id: str
+    ) -> bytes:
         """
         Download bill PDF for a consumer.
 
         Args:
             consumer_no: KSEB consumer number (13 digits)
             mobile: Mobile number associated with the consumer (10 digits)
+            captcha_code: User-entered answer for the bill CAPTCHA
+            session_id: ``BillCaptcha.session_id`` returned by ``get_bill_captcha()``
 
         Returns:
             Bill PDF content as bytes
 
         Raises:
             KSEBValidationError: If inputs are invalid
+            KSEBCaptchaError: If the captcha answer is wrong or expired
             KSEBClientError: If download fails
         """
-        return download_bill(self._session, consumer_no, mobile)
+        return download_bill(
+            self._session, consumer_no, mobile, captcha_code=captcha_code, session_id=session_id
+        )
 
     def parse_bill(self, pdf_bytes: bytes, consumer_no: str) -> BillInfo:
         """
@@ -217,6 +229,8 @@ class KSEBClient:
         consumer_no: str,
         mobile: str,
         *,
+        bill_captcha_code: str,
+        bill_session_id: str,
         captcha_code: Optional[str] = None,
         unique_id: Optional[str] = None,
     ) -> GridCapacityResult:
@@ -234,6 +248,10 @@ class KSEBClient:
         Args:
             consumer_no: KSEB consumer number (13 digits)
             mobile: Mobile number associated with the consumer (10 digits or +91 followed by 10 digits)
+            bill_captcha_code: Answer for the CAPTCHA from ``get_bill_captcha()``
+            bill_session_id: ``BillCaptcha.session_id`` from ``get_bill_captcha()``
+            captcha_code: Answer for the CAPTCHA from ``get_transformer_captcha()``
+            unique_id: ``TransformerCaptcha.unique_id`` from ``get_transformer_captcha()``
 
         Returns:
             GridCapacityResult with section, bill, and transformer info
@@ -267,7 +285,9 @@ class KSEBClient:
 
             # Step 2: Download bill
             logger.debug("Step 2: Downloading bill")
-            pdf_bytes = self.download_bill(consumer_no, mobile)
+            pdf_bytes = self.download_bill(
+                consumer_no, mobile, captcha_code=bill_captcha_code, session_id=bill_session_id
+            )
 
             # Step 3: Parse bill
             logger.debug("Step 3: Parsing bill")

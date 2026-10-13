@@ -93,3 +93,16 @@ class TransformerCaptcha:
     unique_id: str
     image: bytes
     content_type: str | None = None
+
+
+@dataclass
+class BillCaptcha:
+    """Captcha challenge required by the bill download endpoint.
+
+    The answer is stored server-side in the KSEB session, so ``session_id``
+    (the ``kseb_session`` cookie) must be sent back with the solved code.
+    """
+
+    session_id: str
+    image: bytes
+    content_type: str | None = None

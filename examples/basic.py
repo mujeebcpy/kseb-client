@@ -31,8 +31,27 @@ def example_basic():
 
     try:
         # Get complete grid capacity information
+        bill_captcha = client.get_bill_captcha()
+        with open("kseb_bill_captcha.png", "wb") as captcha_file:
+            captcha_file.write(bill_captcha.image)
+        print("Solve the captcha in kseb_bill_captcha.png")
+        bill_captcha_code = input("Bill captcha: ").strip()
+
+        transformer_captcha = client.get_transformer_captcha()
+        with open("kseb_transformer_captcha.png", "wb") as captcha_file:
+            captcha_file.write(transformer_captcha.image)
+        print("Solve the captcha in kseb_transformer_captcha.png")
+        captcha_code = input("Transformer captcha: ").strip()
+
         logger.info(f"Fetching grid capacity for {consumer_no}")
-        result = client.get_grid_capacity(consumer_no, mobile)
+        result = client.get_grid_capacity(
+            consumer_no,
+            mobile,
+            bill_captcha_code=bill_captcha_code,
+            bill_session_id=bill_captcha.session_id,
+            captcha_code=captcha_code,
+            unique_id=transformer_captcha.unique_id,
+        )
 
         # Display results
         print(f"\n✓ Grid Capacity Result:")
@@ -79,7 +98,17 @@ def example_step_by_step():
 
             # Step 2: Download bill
             print("\n2. Downloading bill...")
-            pdf_bytes = client.download_bill(consumer_no, mobile)
+            bill_captcha = client.get_bill_captcha()
+            bill_captcha_path = "kseb_bill_captcha.png"
+            with open(bill_captcha_path, "wb") as captcha_file:
+                captcha_file.write(bill_captcha.image)
+            print(f"   Solve the captcha in {bill_captcha_path}")
+            pdf_bytes = client.download_bill(
+                consumer_no,
+                mobile,
+                captcha_code=input("Captcha: ").strip(),
+                session_id=bill_captcha.session_id,
+            )
             print(f"   ✓ Bill downloaded ({len(pdf_bytes)} bytes)")
 
             # Step 3: Parse bill

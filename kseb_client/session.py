@@ -49,7 +49,9 @@ class KSEBSession:
             total=self.retries,
             backoff_factor=self.backoff_factor,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST", "PUT", "DELETE"],
+            # POST is not retried: the transformer endpoint consumes a single-use
+            # Turnstile token, so a retry can only fail.
+            allowed_methods=["GET", "PUT", "DELETE"],
         )
 
         # Mount adapter for both HTTP and HTTPS

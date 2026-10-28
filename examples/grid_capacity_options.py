@@ -1,6 +1,6 @@
-"""List section details and available transformers without downloading a bill."""
+"""Show section details and the consumer's transformer without downloading a bill."""
 
-from kseb_client import KSEBClient, KSEBClientError, KSEBValidationError
+from kseb_client import KSEBClient, KSEBClientError, KSEBTurnstileError, KSEBValidationError
 
 
 def main() -> None:
@@ -8,36 +8,26 @@ def main() -> None:
 
     try:
         with KSEBClient() as client:
-            captcha = client.get_transformer_captcha()
-            image_path = "kseb_transformer_captcha.png"
-            with open(image_path, "wb") as image_file:
-                image_file.write(captcha.image)
-            print(f"Captcha saved to {image_path}. Enter the characters shown there.")
-            captcha_code = input("Captcha: ").strip()
-            result = client.get_grid_capacity_options(
-                consumer_no,
-                captcha_code=captcha_code,
-                unique_id=captcha.unique_id,
-            )
+            print("Complete the Cloudflare check on https://wss.kseb.in/selfservices/reCap")
+            turnstile_token = input("Turnstile token (cf-turnstile-response): ").strip()
+            result = client.get_grid_capacity_options(consumer_no, turnstile_token=turnstile_token)
 
         print(f"Section: {result.section.section}")
         print(f"Subdivision: {result.section.subdivision}")
         print(f"Division: {result.section.division}")
-        print("\nAvailable transformers:")
-
-        if not result.transformers:
-            print("No transformers were returned for this section.")
-            return
+        print("\nTransformer:")
 
         for transformer in result.transformers:
             print(
                 f"- {transformer.transformer_name}: "
                 f"{transformer.balance_available:g} kW available "
                 f"(allowed {transformer.allowed_cap:g}, "
-                f"committed {transformer.comp_cap:g}, "
-                f"registered {transformer.regi:g})"
+                f"connected {transformer.comp_cap:g}, "
+                f"as on {transformer.as_on})"
             )
 
+    except KSEBTurnstileError as error:
+        print(error)
     except KSEBValidationError as error:
         print(f"Invalid input: {error}")
     except KSEBClientError as error:

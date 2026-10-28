@@ -1,19 +1,16 @@
 """
 Transformer information retrieval from KSEB endpoints.
 
-This module handles fetching and matching transformer details.
+This module handles fetching the transformer (DTR) capacity for a consumer.
 """
 
 import logging
-import secrets
-import time
-from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Optional
 
-from .constants import DTR_AVAILABLE_URL, TRANSFORMER_CAPTCHA_URL
-from .exceptions import KSEBAPIError, KSEBCaptchaError, KSEBParsingError, KSEBTransformerNotFoundError, KSEBValidationError
-from .models import SectionInfo, Transformer, TransformerCaptcha
-from .utils import extract_section_code, normalize_transformer_name, parse_capacity_value, validate_consumer_no
+from .constants import DTR_AVAILABLE_URL, FORM_FIELD_DTR_CONSUMER_NO, FORM_FIELD_TURNSTILE
+from .exceptions import KSEBAPIError, KSEBParsingError, KSEBTurnstileError, KSEBValidationError
+from .models import SectionInfo, Transformer
+from .utils import parse_capacity_value, validate_consumer_no
 
 if TYPE_CHECKING:
     from .session import KSEBSession
@@ -21,87 +18,61 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_transformer_captcha(session: "KSEBSession") -> TransformerCaptcha:
-    """Fetch a CAPTCHA image and its unique ID for transformer lookup.
-
-    The unique ID is generated client-side, as the KSEB website does; the server
-    stores the CAPTCHA answer under it. The ID returned by ``getUniqueId`` is a
-    constant and must not be used.
-    """
-    try:
-        unique_id = _generate_unique_id()
-        image_response = session.get(TRANSFORMER_CAPTCHA_URL, params={"uniqId": unique_id})
-        if not image_response.content:
-            raise KSEBParsingError("Captcha image response was empty", data_type="image")
-        return TransformerCaptcha(
-            unique_id=unique_id,
-            image=image_response.content,
-            content_type=image_response.headers.get("Content-Type"),
-        )
-    except (KSEBAPIError, KSEBParsingError):
-        raise
-    except Exception as e:
-        raise KSEBAPIError(f"Failed to fetch transformer captcha: {e}") from e
-
-
-def _generate_unique_id() -> str:
-    """Build a CAPTCHA ID the way the KSEB website does (ms timestamp + random)."""
-    return str(int(time.time() * 1000) + secrets.randbelow(10000) + 10000)
-
-
-def get_transformers(
+def get_transformer(
     session: "KSEBSession",
-    section_code: str,
-    section_info: Optional[SectionInfo] = None,
+    consumer_no: str,
     *,
-    captcha_code: str,
-    unique_id: str,
-) -> list[Transformer]:
+    turnstile_token: str,
+    section_info: Optional[SectionInfo] = None,
+) -> Transformer:
     """
-    Fetch list of available transformers for a section.
+    Fetch the transformer serving a consumer, with its solar capacity.
+
+    KSEB protects this endpoint with Cloudflare Turnstile. The token must come
+    from a person completing the Turnstile check on the KSEB website, and it can
+    be used only once.
 
     Args:
         session: KSEBSession instance for making HTTP requests
-        section_code: Section code (4-digit code extracted from consumer number)
-        section_info: Optional SectionInfo to enrich transformer data with division/subdivision
-        captcha_code: User-entered CAPTCHA answer
-        unique_id: ID returned with the CAPTCHA challenge
+        consumer_no: KSEB consumer number (13 digits)
+        turnstile_token: ``cf-turnstile-response`` value from the Turnstile check
+        section_info: Optional SectionInfo to fill in division/subdivision
 
     Returns:
-        List of Transformer objects
+        Transformer object
 
     Raises:
-        KSEBValidationError: If section_code is invalid
-        KSEBAPIError: If API request fails
+        KSEBValidationError: If inputs are invalid
+        KSEBTurnstileError: If KSEB rejects the Turnstile token
+        KSEBAPIError: If the API request fails
         KSEBParsingError: If response parsing fails
     """
-    if not section_code or not isinstance(section_code, str) or len(section_code) != 4:
+    if not validate_consumer_no(consumer_no):
+        raise KSEBValidationError(f"Invalid consumer number format: {consumer_no}", field="consumer_no")
+    if not isinstance(turnstile_token, str) or not turnstile_token.strip():
         raise KSEBValidationError(
-            f"Invalid section code format: {section_code}", field="section_code"
+            "Turnstile verification is required: complete the Cloudflare check first",
+            field="turnstile_token",
         )
-    if not isinstance(captcha_code, str) or not captcha_code.strip():
-        raise KSEBValidationError("Captcha answer is required", field="captcha_code")
-    if not isinstance(unique_id, str) or not unique_id.strip():
-        raise KSEBValidationError("Captcha unique ID is required", field="unique_id")
 
-    logger.debug(f"Fetching transformers for section: {section_code}")
+    logger.debug(f"Fetching transformer for consumer: {consumer_no}")
 
     try:
-        # Make API request
         response = session.post(
             DTR_AVAILABLE_URL,
-            data={"sectionId": section_code, "code": captcha_code.strip(), "uniqueId": unique_id.strip()},
+            data={
+                FORM_FIELD_DTR_CONSUMER_NO: consumer_no,
+                FORM_FIELD_TURNSTILE: turnstile_token.strip(),
+            },
         )
 
-        # Check response status
         if response.status_code != 200:
             raise KSEBAPIError(
-                f"Transformer list request failed",
+                "Transformer request failed",
                 status_code=response.status_code,
                 response=response.text[:500],
             )
 
-        # Parse JSON response
         try:
             data = response.json()
         except Exception as e:
@@ -109,113 +80,47 @@ def get_transformers(
                 f"Failed to parse transformer API response: {str(e)}", data_type="JSON"
             ) from e
 
-        # The endpoint reports CAPTCHA failures inside an HTTP 200 JSON response.
-        if isinstance(data, dict) and data.get("err_flag") == "1":
-            message = str(data.get("messageCd") or "Transformer lookup was rejected")
-            if "verification code" in message.lower() or "captcha" in message.lower():
-                raise KSEBCaptchaError(message)
+        if not isinstance(data, dict):
+            raise KSEBParsingError("Transformer response is not a JSON object", data_type="JSON")
+
+        # The endpoint reports failures inside an HTTP 200 JSON response.
+        if str(data.get("err_flag")) != "0":
+            message = str(data.get("disp_msg") or data.get("messageCd") or "Transformer lookup was rejected")
+            if "verification" in message.lower() or "turnstile" in message.lower():
+                raise KSEBTurnstileError(
+                    f"Turnstile verification failed: {message}. Complete the Cloudflare check again."
+                )
             raise KSEBAPIError(message, response=response.text[:500])
 
-        # Extract transformer list
-        if not isinstance(data, dict) or "list" not in data:
-            raise KSEBAPIError(
-                "Transformer response did not include a list",
-                response=response.text[:500],
-            )
+        dtr = data.get("dtr")
+        if not isinstance(dtr, dict):
+            raise KSEBAPIError("Transformer response did not include DTR details", response=response.text[:500])
 
-        transformers_data = data.get("list", [])
+        try:
+            transformer = _parse_transformer_data(dtr, data.get("ason"), section_info)
+        except ValueError as e:
+            raise KSEBParsingError(str(e), data_type="JSON") from e
 
-        if not isinstance(transformers_data, list):
-            raise KSEBParsingError("Transformer list is not a valid list", data_type="JSON")
+        logger.info(f"Retrieved transformer {transformer.transformer_name} for consumer {consumer_no}")
+        return transformer
 
-        # Convert to Transformer objects
-        transformers = []
-
-        for dtr_data in transformers_data:
-            try:
-                transformer = _parse_transformer_data(dtr_data, section_info)
-                transformers.append(transformer)
-            except (KSEBParsingError, ValueError) as e:
-                logger.warning(f"Failed to parse transformer data: {e}")
-                continue
-
-        logger.info(f"Retrieved {len(transformers)} transformers for section {section_code}")
-        return transformers
-
-    except (KSEBValidationError, KSEBAPIError, KSEBParsingError, KSEBCaptchaError):
+    except (KSEBValidationError, KSEBAPIError, KSEBParsingError, KSEBTurnstileError):
         raise
     except Exception as e:
-        logger.error(f"Unexpected error fetching transformers: {e}")
-        raise KSEBAPIError(f"Failed to get transformers: {str(e)}") from e
+        logger.error(f"Unexpected error fetching transformer: {e}")
+        raise KSEBAPIError(f"Failed to get transformer: {str(e)}") from e
 
 
-def find_transformer(
-    session: "KSEBSession", section_code: str, transformer_name: str,
-    *, captcha_code: str, unique_id: str,
+def _parse_transformer_data(
+    data: dict, as_on: Optional[str] = None, section_info: Optional[SectionInfo] = None
 ) -> Transformer:
     """
-    Find a specific transformer by name in a section.
+    Parse the ``dtr`` object from the API response.
 
     Args:
-        session: KSEBSession instance
-        section_code: Section code (4-digit code)
-        transformer_name: Name/ID of the transformer
-
-    Returns:
-        Transformer object if found
-
-    Raises:
-        KSEBValidationError: If inputs are invalid
-        KSEBTransformerNotFoundError: If transformer not found
-        KSEBAPIError: If API request fails
-    """
-    if not transformer_name or not isinstance(transformer_name, str):
-        raise KSEBValidationError(
-            f"Invalid transformer name: {transformer_name}", field="transformer_name"
-        )
-
-    # Normalize the name for comparison
-    normalized_name = normalize_transformer_name(transformer_name)
-
-    logger.debug(f"Finding transformer: {transformer_name} in section: {section_code}")
-
-    # Get all transformers for the section
-    transformers = get_transformers(
-        session, section_code, captcha_code=captcha_code, unique_id=unique_id
-    )
-
-    # Prefer exact normalized matches, then accept the closest sufficiently similar name.
-    for transformer in transformers:
-        if normalize_transformer_name(transformer.transformer_name) == normalized_name:
-            logger.info(f"Found transformer: {transformer.transformer_name}")
-            return transformer
-
-    def similarity(candidate: Transformer) -> float:
-        candidate_name = normalize_transformer_name(candidate.transformer_name)
-        return SequenceMatcher(None, normalized_name, candidate_name).ratio()
-
-    if transformers:
-        best_match = max(transformers, key=similarity)
-        score = similarity(best_match)
-        if score >= 0.6:
-            logger.info("Matched transformer %r to %r (similarity %.2f)", transformer_name, best_match.transformer_name, score)
-            return best_match
-
-    # Not found
-    raise KSEBTransformerNotFoundError(
-        f"Transformer not found: {transformer_name}",
-        transformer_name=transformer_name,
-        section_code=section_code,
-    )
-
-
-def _parse_transformer_data(data: dict, section_info: Optional[SectionInfo] = None) -> Transformer:
-    """
-    Parse transformer data from API response.
-
-    Args:
-        data: Raw transformer data from API
-        section_info: Optional SectionInfo to provide division/subdivision if missing from API response
+        data: Raw ``dtr`` data from API
+        as_on: ``ason`` date from the API response
+        section_info: Optional SectionInfo to provide division/subdivision
 
     Returns:
         Transformer object
@@ -223,51 +128,28 @@ def _parse_transformer_data(data: dict, section_info: Optional[SectionInfo] = No
     Raises:
         ValueError: If required fields are missing or invalid
     """
-    # Fields required from API
-    required_fields = [
-        "transformer_name",
-        "allowed_cap",
-        "comp_cap",
-        "regi",
-    ]
+    required_fields = ["transformer_name", "available_cap", "connected_cap", "balance_cap"]
 
-    # Fields that may come from API or section_info
-    optional_fields = ["division", "sub_division"]
-
-    # Check required fields
     missing = [f for f in required_fields if f not in data]
     if missing:
         raise ValueError(f"Missing required transformer fields: {missing}")
 
     try:
-        # Get division and sub_division from API data or section_info
-        division = data.get("division")
-        if not division and section_info:
-            division = section_info.division
-        division = division or ""
+        division = data.get("division") or (section_info.division if section_info else "") or ""
+        sub_division = data.get("sub_division") or (section_info.subdivision if section_info else "") or ""
 
-        sub_division = data.get("sub_division")
-        if not sub_division and section_info:
-            sub_division = section_info.subdivision
-        sub_division = sub_division or ""
-
-        # Parse capacity values
-        allowed_cap = parse_capacity_value(data["allowed_cap"])
-        comp_cap = parse_capacity_value(data["comp_cap"])
-        regi = parse_capacity_value(data["regi"])
-
-        # Calculate balance
-        balance_available = allowed_cap - (comp_cap + regi)
-        balance_available = round(balance_available, 3)
+        capacity = data.get("capacity")
 
         return Transformer(
             transformer_name=str(data["transformer_name"]).strip(),
             division=str(division).strip(),
             sub_division=str(sub_division).strip(),
-            allowed_cap=allowed_cap,
-            comp_cap=comp_cap,
-            regi=regi,
-            balance_available=balance_available,
+            allowed_cap=parse_capacity_value(data["available_cap"]),
+            comp_cap=parse_capacity_value(data["connected_cap"]),
+            regi=0.0,
+            balance_available=parse_capacity_value(data["balance_cap"]),
+            capacity_kva=parse_capacity_value(capacity) if capacity not in (None, "") else None,
+            as_on=str(as_on).strip() if as_on else None,
         )
 
     except (ValueError, KeyError) as e:

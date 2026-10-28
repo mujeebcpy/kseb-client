@@ -64,6 +64,12 @@ class KSEBCaptchaError(KSEBClientError):
     pass
 
 
+class KSEBTurnstileError(KSEBCaptchaError):
+    """Raised when KSEB rejects a Cloudflare Turnstile token (missing, used or expired)."""
+
+    pass
+
+
 class KSEBTransformerNotFoundError(KSEBClientError):
     """Raised when a transformer cannot be found in the available list."""
 

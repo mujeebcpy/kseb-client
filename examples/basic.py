@@ -6,7 +6,7 @@ information for a consumer.
 """
 
 import logging
-from kseb_client import KSEBClient, KSEBClientError, KSEBValidationError
+from kseb_client import KSEBClient, KSEBClientError, KSEBTurnstileError, KSEBValidationError
 
 # Configure logging to see what's happening
 logging.basicConfig(
@@ -14,6 +14,16 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def ask_turnstile_token() -> str:
+    """Ask for a Turnstile token from the KSEB DTR Capacity page.
+
+    In an app, the token comes from the person completing the Cloudflare check
+    on https://wss.kseb.in/selfservices/reCap. Each token works once.
+    """
+    print("Complete the Cloudflare check on https://wss.kseb.in/selfservices/reCap")
+    return input("Turnstile token (cf-turnstile-response): ").strip()
 
 
 def example_basic():
@@ -37,11 +47,7 @@ def example_basic():
         print("Solve the captcha in kseb_bill_captcha.png")
         bill_captcha_code = input("Bill captcha: ").strip()
 
-        transformer_captcha = client.get_transformer_captcha()
-        with open("kseb_transformer_captcha.png", "wb") as captcha_file:
-            captcha_file.write(transformer_captcha.image)
-        print("Solve the captcha in kseb_transformer_captcha.png")
-        captcha_code = input("Transformer captcha: ").strip()
+        turnstile_token = ask_turnstile_token()
 
         logger.info(f"Fetching grid capacity for {consumer_no}")
         result = client.get_grid_capacity(
@@ -49,8 +55,7 @@ def example_basic():
             mobile,
             bill_captcha_code=bill_captcha_code,
             bill_session_id=bill_captcha.session_id,
-            captcha_code=captcha_code,
-            unique_id=transformer_captcha.unique_id,
+            turnstile_token=turnstile_token,
         )
 
         # Display results
@@ -64,7 +69,8 @@ def example_basic():
         print(f" Security Deposit: {result.bill.security_deposit}")
         print(f" Net Payable: {result.bill.net_payable}")
 
-
+    except KSEBTurnstileError as e:
+        print(f"✗ {e}")
     except KSEBValidationError as e:
         print(f"✗ Validation Error: {e}")
     except KSEBClientError as e:
@@ -118,34 +124,18 @@ def example_step_by_step():
             print(f"   ✓ DTR: {bill.dtr}")
             print(f"   ✓ Connected Load: {bill.connected_load}")
 
-            # Step 4: Get transformers
-            print("\n4. Fetching transformer list...")
-            section_code = consumer_no[2:6]
-            captcha = client.get_transformer_captcha()
-            captcha_path = "kseb_transformer_captcha.png"
-            with open(captcha_path, "wb") as captcha_file:
-                captcha_file.write(captcha.image)
-            print(f"   Solve the captcha in {captcha_path}")
-            transformers = client.get_transformers(
-                section_code,
-                captcha_code=input("Captcha: ").strip(),
-                unique_id=captcha.unique_id,
+            # Step 4: Get the consumer's transformer
+            print("\n4. Fetching transformer...")
+            dtr = client.get_transformer(
+                consumer_no, turnstile_token=ask_turnstile_token(), section_info=section
             )
-            print(f"   ✓ Found {len(transformers)} transformers")
-
-            # Step 5: Find specific transformer
-            print(f"\n5. Finding transformer: {bill.dtr}...")
-            dtr = next(
-                (item for item in transformers if item.transformer_name.strip().upper() == bill.dtr.strip().upper()),
-                None,
-            )
-            if dtr is None:
-                print("   Transformer name was not an exact match; choose from the list above.")
-                return
             print(f"   ✓ Transformer: {dtr.transformer_name}")
             print(f"   ✓ Available Balance: {dtr.balance_available} kW")
             print(f"   ✓ Allowed Capacity: {dtr.allowed_cap} kW")
+            print(f"   ✓ As on: {dtr.as_on}")
 
+        except KSEBTurnstileError as e:
+            print(f"   ✗ {e}")
         except KSEBClientError as e:
             print(f"   ✗ Error: {e}")
 
@@ -168,70 +158,25 @@ def example_error_handling():
     # Test 2: Invalid mobile number
     print("\n2. Testing invalid mobile number...")
     try:
-        client.get_grid_capacity("1145657015077", "123")
+        client.get_grid_capacity("1145657015077", "123", bill_captcha_code="x", bill_session_id="x", turnstile_token="x")
     except KSEBValidationError as e:
         print(f"   ✓ Caught validation error: {e}")
 
     # Test 3: Invalid credentials (might fail with authentication error)
     print("\n3. Testing with invalid credentials...")
     try:
-        client.get_grid_capacity("0000000000000", "9999999999")
+        client.get_grid_capacity("0000000000000", "9999999999", bill_captcha_code="x", bill_session_id="x", turnstile_token="x")
     except KSEBClientError as e:
         print(f"   ✓ Caught SDK error: {type(e).__name__}: {e}")
 
-    client.close()
-
-
-def example_with_caching():
-    """Example: Using caching for performance."""
-    print("\n" + "="*60)
-    print("Caching Example")
-    print("="*60)
-
-    # Create client with 30-minute cache TTL
-    client = KSEBClient(cache_ttl=1800)
-
-    section_code = "1234"
-
+    # Test 4: Rejected Turnstile token
+    print("\n4. Testing with an invalid Turnstile token...")
     try:
-        print(f"\n1. First call to get_transformers (will fetch from API)...")
-        captcha = client.get_transformer_captcha()
-        captcha_path = "kseb_transformer_captcha.png"
-        with open(captcha_path, "wb") as captcha_file:
-            captcha_file.write(captcha.image)
-        print(f"Solve the captcha in {captcha_path}")
-        captcha_code = input("Captcha: ").strip()
-        transformers1 = client.get_transformers(
-            section_code, captcha_code=captcha_code, unique_id=captcha.unique_id
-        )
-        print(f"   ✓ Got {len(transformers1)} transformers")
+        client.get_transformer("1145657015077", turnstile_token="invalid")
+    except KSEBTurnstileError as e:
+        print(f"   ✓ Caught Turnstile error: {e}")
 
-        print(f"\n2. Second call to get_transformers (will use cache)...")
-        transformers2 = client.get_transformers(section_code)
-        print(f"   ✓ Got {len(transformers2)} transformers (from cache)")
-
-        print(f"\n3. Third call with use_cache=False (will fetch from API)...")
-        captcha = client.get_transformer_captcha()
-        captcha_path = "kseb_transformer_captcha.png"
-        with open(captcha_path, "wb") as captcha_file:
-            captcha_file.write(captcha.image)
-        print(f"Solve the captcha in {captcha_path}")
-        transformers3 = client.get_transformers(
-            section_code,
-            use_cache=False,
-            captcha_code=input("Captcha: ").strip(),
-            unique_id=captcha.unique_id,
-        )
-        print(f"   ✓ Got {len(transformers3)} transformers (fresh from API)")
-
-        print(f"\n4. Clear cache...")
-        client.clear_cache()
-        print(f"   ✓ Cache cleared")
-
-    except KSEBClientError as e:
-        print(f"   ✗ Error: {e}")
-    finally:
-        client.close()
+    client.close()
 
 
 def example_configuration():
@@ -243,19 +188,19 @@ def example_configuration():
     # Configuration 1: Default settings
     print("\n1. Default configuration:")
     client1 = KSEBClient()
-    print(f"   Timeout: 15s, Retries: 3, Cache TTL: 900s")
+    print(f"   Timeout: 15s, Retries: 3")
     client1.close()
 
     # Configuration 2: Custom settings (faster retries)
     print("\n2. Fast configuration (low timeout, fewer retries):")
     client2 = KSEBClient(timeout=5, retries=1)
-    print(f"   Timeout: 5s, Retries: 1, Cache TTL: 900s")
+    print(f"   Timeout: 5s, Retries: 1")
     client2.close()
 
     # Configuration 3: Custom settings (robust retries)
     print("\n3. Robust configuration (high timeout, more retries):")
-    client3 = KSEBClient(timeout=30, retries=5, backoff_factor=0.5, cache_ttl=3600)
-    print(f"   Timeout: 30s, Retries: 5, Cache TTL: 3600s")
+    client3 = KSEBClient(timeout=30, retries=5, backoff_factor=0.5)
+    print(f"   Timeout: 30s, Retries: 5")
     client3.close()
 
 
@@ -267,7 +212,6 @@ if __name__ == "__main__":
     # example_basic()  # Note: Will fail without valid credentials
     example_step_by_step()  # Note: Will fail without valid credentials
     example_error_handling()
-    # example_with_caching()  # Note: Will fail without valid credentials
     example_configuration()
 
     print("\n" + "="*60)

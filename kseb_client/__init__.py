@@ -29,6 +29,7 @@ from .exceptions import (
     KSEBParsingError,
     KSEBSectionNotFoundError,
     KSEBTransformerNotFoundError,
+    KSEBTurnstileError,
     KSEBValidationError,
 )
 from .models import (
@@ -38,7 +39,6 @@ from .models import (
     GridCapacityResult,
     SectionInfo,
     Transformer,
-    TransformerCaptcha,
 )
 
 __version__ = "1.0.0"
@@ -51,7 +51,6 @@ __all__ = [
     "BillInfo",
     "BillCaptcha",
     "Transformer",
-    "TransformerCaptcha",
     "GridCapacityResult",
     "GridCapacityOptionsResult",
     # Exceptions
@@ -63,6 +62,7 @@ __all__ = [
     "KSEBParsingError",
     "KSEBBillDownloadError",
     "KSEBCaptchaError",
+    "KSEBTurnstileError",
     "KSEBTransformerNotFoundError",
     "KSEBSectionNotFoundError",
 ]

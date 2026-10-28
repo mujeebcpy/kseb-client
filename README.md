@@ -9,14 +9,13 @@ A production-quality Python SDK for interacting with KSEB (Kerala State Electric
 ## Features
 
 - 🔄 **Automatic Retries** with exponential backoff
-- ⚡ **In-Memory Caching** for transformer data (configurable TTL)
 - 📄 **PDF Parsing** without temporary files
 - 🎯 **Type Hints** throughout the codebase
 - 🚫 **No Print Statements** - uses Python logging
 - 🔒 **Exception Handling** with meaningful custom exceptions
 - 🧪 **Framework Agnostic** - works with FastAPI, Flask, Django, ERPNext, CLI, and more
 - 🔌 **Single Session** for all HTTP communication
-- ⚙️ **Fully Configurable** - timeout, retries, cache TTL
+- ⚙️ **Fully Configurable** - timeout, retries, backoff
 
 ## Installation
 
@@ -44,9 +43,11 @@ pip install -e ".[dev]"
 
 ### Basic Usage
 
-KSEB protects both the bill and the transformer lookup with a CAPTCHA, so a person has
-to solve two images. Fetch them, show them to the user, and pass the answers back
-together with the IDs that came with each image.
+KSEB protects the bill with an image CAPTCHA and the transformer lookup with Cloudflare
+Turnstile, so a person has to complete both. Show the bill captcha image to the user and
+pass the answer back with its session ID. For the transformer, pass the
+`cf-turnstile-response` token the person got by completing the Turnstile check on the
+[KSEB DTR Capacity page](https://wss.kseb.in/selfservices/reCap).
 
 ```python
 from kseb_client import KSEBClient
@@ -54,13 +55,10 @@ from kseb_client import KSEBClient
 # Initialize client
 client = KSEBClient()
 
-# Fetch both captchas and let the user solve them
+# Fetch the bill captcha and let the user solve it
 bill_captcha = client.get_bill_captcha()
-transformer_captcha = client.get_transformer_captcha()
 with open("bill_captcha.png", "wb") as f:
     f.write(bill_captcha.image)
-with open("transformer_captcha.png", "wb") as f:
-    f.write(transformer_captcha.image)
 
 # Get complete grid capacity information
 result = client.get_grid_capacity(
@@ -68,8 +66,7 @@ result = client.get_grid_capacity(
     mobile="9895672251",
     bill_captcha_code=input("Bill captcha (bill_captcha.png): ").strip(),
     bill_session_id=bill_captcha.session_id,
-    captcha_code=input("Transformer captcha (transformer_captcha.png): ").strip(),
-    unique_id=transformer_captcha.unique_id,
+    turnstile_token=input("Turnstile token (cf-turnstile-response): ").strip(),
 )
 
 # Access the results
@@ -89,26 +86,28 @@ with KSEBClient() as client:
     print(section.section)
 ```
 
-### CAPTCHA Lifecycle
+### CAPTCHA and Turnstile Lifecycle
 
-- `BillCaptcha.session_id` and `TransformerCaptcha.unique_id` are plain strings. Store them
-  with the user's request (session, form field, cache) and send them back with the answers.
-  They work from any `KSEBClient` instance, so a web app can show the captchas in one request
-  and submit them in another.
+- `BillCaptcha.session_id` is a plain string. Store it with the user's request (session,
+  form field, cache) and send it back with the answer. It works from any `KSEBClient`
+  instance, so a web app can show the captcha in one request and submit it in another.
 - Each captcha can be submitted once. After a wrong answer (`KSEBCaptchaError`), fetch a new one.
 - The bill `session_id` expires after about 2 hours.
+- A Turnstile token works once and expires after a few minutes. When KSEB rejects it, the
+  SDK raises `KSEBTurnstileError` (a subclass of `KSEBCaptchaError`) with KSEB's message,
+  for example `Turnstile verification failed: Verification failed. Complete the Cloudflare
+  check again.` Show that message and have the person complete the check again.
 
 ### Advanced Configuration
 
 ```python
 from kseb_client import KSEBClient
 
-# Configure with custom timeout, retries, and cache TTL
+# Configure with custom timeout, retries, and backoff
 client = KSEBClient(
     timeout=20,              # HTTP timeout in seconds
-    retries=5,               # Number of retries
+    retries=5,               # Number of retries (GET requests only)
     backoff_factor=0.5,      # Exponential backoff multiplier
-    cache_ttl=1800           # Cache TTL in seconds (30 minutes)
 )
 
 section = client.get_section("1145657015077")
@@ -191,75 +190,52 @@ print(bill.tariff)           # Tariff category
 
 ---
 
-##### `get_transformers(section_code: str, use_cache: bool = True, *, captcha_code: str, unique_id: str) -> list[Transformer]`
+##### `get_transformer(consumer_no: str, *, turnstile_token: str, section_info: SectionInfo | None = None) -> Transformer`
 
-Get available transformers for a section.
+Get the transformer serving a consumer, with its solar capacity. KSEB looks the
+transformer up from the consumer number, so no transformer name matching is needed.
 
 ```python
-# Results are cached by default (15 minutes)
-captcha = client.get_transformer_captcha()
-captcha_code = input("Captcha: ").strip()
-transformers = client.get_transformers(
-    "1234", captcha_code=captcha_code, unique_id=captcha.unique_id
+dtr = client.get_transformer(
+    "1145657015077",
+    turnstile_token=input("Turnstile token (cf-turnstile-response): ").strip(),
 )
-
-for dtr in transformers:
-    print(f"{dtr.transformer_name}: {dtr.balance_available} kW available")
+print(f"Transformer: {dtr.transformer_name} ({dtr.capacity_kva} kVA)")
+print(f"Allowed solar: {dtr.allowed_cap} kW")
+print(f"Grid connected: {dtr.comp_cap} kW")
+print(f"Balance: {dtr.balance_available} kW (as on {dtr.as_on})")
 ```
 
 **Parameters:**
-- `section_code` - 4-digit section code (extracted from consumer number)
-- `use_cache` - Use cached results (default True)
-
-**Returns:**
-- List of `Transformer` objects
-
----
-
-##### `find_transformer(section_code: str, transformer_name: str, *, captcha_code: str, unique_id: str) -> Transformer`
-
-Find a specific transformer by name.
-
-```python
-captcha = client.get_transformer_captcha()
-captcha_code = input("Captcha: ").strip()
-dtr = client.find_transformer(
-    "1234", "DTR-001", captcha_code=captcha_code, unique_id=captcha.unique_id
-)
-print(f"Balance: {dtr.balance_available} kW")
-print(f"Allowed Capacity: {dtr.allowed_cap} kW")
-```
-
-**Returns:**
-- `Transformer` object if found
+- `consumer_no` - 13-digit consumer number
+- `turnstile_token` - `cf-turnstile-response` from the Turnstile check on the KSEB website (single use)
+- `section_info` - Optional `SectionInfo` used to fill in division and subdivision
 
 **Raises:**
-- `KSEBTransformerNotFoundError` - Transformer not found
+- `KSEBValidationError` - Invalid consumer number or empty token
+- `KSEBTurnstileError` - KSEB rejected the Turnstile token
+- `KSEBAPIError` - KSEB returned another error (for example an unknown consumer)
 
 ---
 
-##### `get_grid_capacity(consumer_no: str, mobile: str, *, bill_captcha_code: str, bill_session_id: str, captcha_code: str, unique_id: str) -> GridCapacityResult`
+##### `get_grid_capacity(consumer_no: str, mobile: str, *, bill_captcha_code: str, bill_session_id: str, turnstile_token: str) -> GridCapacityResult`
 
 Complete high-level helper that combines all operations.
 
 Steps:
-1. Extracts section code from consumer number
-2. Fetches section details
-3. Downloads and parses bill
-4. Fetches available transformers
-5. Matches the consumer's transformer
+1. Fetches section details
+2. Downloads and parses bill
+3. Fetches the consumer's transformer
 
 ```python
 bill_captcha = client.get_bill_captcha()
-transformer_captcha = client.get_transformer_captcha()
-# Show both captcha images to the user and collect the answers.
+# Show the captcha image to the user and collect the answer and the Turnstile token.
 result = client.get_grid_capacity(
     "1145657015077",
     "9895672251",
     bill_captcha_code=input("Bill captcha: ").strip(),
     bill_session_id=bill_captcha.session_id,
-    captcha_code=input("Transformer captcha: ").strip(),
-    unique_id=transformer_captcha.unique_id,
+    turnstile_token=input("Turnstile token: ").strip(),
 )
 
 print(f"Section: {result.section.section}")
@@ -274,39 +250,23 @@ print(f"Available: {result.transformer.balance_available} kW")
 **Raises:**
 - Any exception from underlying operations
 
-##### `get_grid_capacity_options(consumer_no: str, *, captcha_code: str, unique_id: str) -> GridCapacityOptionsResult`
+##### `get_grid_capacity_options(consumer_no: str, *, turnstile_token: str) -> GridCapacityOptionsResult`
 
-Bill-free fallback for when bill download is unavailable. It fetches section details
-and every transformer available in that section, so an application can let the user
-search and choose one. It returns no bill-derived address or consumer details.
+Bill-free lookup for when bill download is unavailable. It fetches section details and
+the consumer's transformer. It returns no bill-derived address or consumer details.
 
 ```python
-captcha = client.get_transformer_captcha()
-# Display captcha.image (PNG/JPEG bytes) in your application and ask the user to solve it.
-captcha_code = input("Captcha: ").strip()
 result = client.get_grid_capacity_options(
     "1145657015077",
-    captcha_code=captcha_code,
-    unique_id=captcha.unique_id,
+    turnstile_token=input("Turnstile token: ").strip(),
 )
 print(result.section.section)
 for transformer in result.transformers:
     print(transformer.transformer_name, transformer.balance_available)
 ```
 
-The result contains `section` and `transformers` fields. Use the selected transformer's
-capacity values from this list in your application. Fetch and submit the CAPTCHA using
-the same `KSEBClient` instance so its session cookies are retained.
-
----
-
-##### `clear_cache() -> None`
-
-Clear the transformer cache manually.
-
-```python
-client.clear_cache()
-```
+The result contains `section` and `transformers` fields. KSEB now returns only the
+consumer's own transformer, so `transformers` holds one item.
 
 ---
 
@@ -361,10 +321,12 @@ class Transformer:
     transformer_name: str
     division: str
     sub_division: str
-    allowed_cap: float
-    comp_cap: float
-    regi: float
-    balance_available: float
+    allowed_cap: float                # Solar capacity KSEB allows on the transformer (kW)
+    comp_cap: float                   # Capacity already grid connected (kW)
+    regi: float                       # Always 0: KSEB no longer reports it separately
+    balance_available: float          # Remaining capacity reported by KSEB (kW)
+    capacity_kva: float | None = None # Transformer rating (kVA)
+    as_on: str | None = None          # Date the figures are valid for
 ```
 
 #### `GridCapacityResult`
@@ -391,7 +353,7 @@ All exceptions inherit from `KSEBClientError`.
 | `KSEBParsingError` | Data parsing fails (PDF, HTML, JSON) |
 | `KSEBBillDownloadError` | Bill download fails |
 | `KSEBCaptchaError` | Captcha answer is wrong or expired |
-| `KSEBTransformerNotFoundError` | Transformer not found |
+| `KSEBTurnstileError` | Turnstile token is missing, used or expired (subclass of `KSEBCaptchaError`) |
 | `KSEBSectionNotFoundError` | Section not found |
 
 ```python
@@ -432,7 +394,7 @@ pdf_bytes = client.download_bill(
 
 Output:
 ```
-DEBUG:kseb_client.client:KSEBClient initialized: timeout=15s, retries=3, backoff=0.3, cache_ttl=900s
+DEBUG:kseb_client.client:KSEBClient initialized: timeout=15s, retries=3, backoff=0.3
 DEBUG:kseb_client.session:GET https://kseb.in/captcha/default
 Captcha: 7pnd
 DEBUG:kseb_client.bill:Downloading bill for consumer: 1145657015077
@@ -442,14 +404,16 @@ INFO:kseb_client.bill:Bill downloaded successfully (8899 bytes)
 
 ## Integration Examples
 
-Web apps need two steps because a person has to solve the captchas:
+Web apps need two steps because a person has to solve the captcha and the Turnstile check:
 
-1. **Get captchas.** The server returns both images and their IDs. The frontend shows the images.
-2. **Submit.** The frontend sends the consumer details, both answers and both IDs back.
+1. **Get captcha.** The server returns the bill captcha image and its session ID. The frontend shows the image.
+2. **Submit.** The frontend sends the consumer details, the captcha answer, the session ID and the
+   Turnstile token back.
 
-One `KSEBClient` can be shared by all requests, because the captcha IDs travel with the request
-and no per-user state is kept in the client. If either answer is wrong, both captchas are used
-up, so the frontend should fetch a new pair (`KSEBCaptchaError`, HTTP 422 below).
+One `KSEBClient` can be shared by all requests, because the captcha session ID and Turnstile
+token travel with the request and no per-user state is kept in the client. If the captcha or
+token is rejected, both are used up, so the frontend should fetch a new captcha and have the
+person complete the Turnstile check again (`KSEBCaptchaError` / `KSEBTurnstileError`, HTTP 422 below).
 
 ### FastAPI
 
@@ -473,20 +437,16 @@ class GridCapacityRequest(BaseModel):
     mobile: str
     bill_captcha_code: str
     bill_session_id: str
-    captcha_code: str
-    unique_id: str
+    turnstile_token: str
 
 
 # Plain `def` endpoints: the SDK is blocking, so FastAPI runs them in a thread pool.
 @app.get("/captchas")
 def get_captchas():
     bill = client.get_bill_captcha()
-    transformer = client.get_transformer_captcha()
     return {
         "bill_session_id": bill.session_id,
         "bill_captcha": data_uri(bill.image, bill.content_type),
-        "unique_id": transformer.unique_id,
-        "transformer_captcha": data_uri(transformer.image, transformer.content_type),
     }
 
 
@@ -498,11 +458,10 @@ def get_grid_capacity(body: GridCapacityRequest):
             body.mobile,
             bill_captcha_code=body.bill_captcha_code,
             bill_session_id=body.bill_session_id,
-            captcha_code=body.captcha_code,
-            unique_id=body.unique_id,
+            turnstile_token=body.turnstile_token,
         )
     except KSEBCaptchaError as e:
-        raise HTTPException(status_code=422, detail=f"{e} Fetch new captchas and try again.")
+        raise HTTPException(status_code=422, detail=f"{e} Fetch a new captcha, complete the Turnstile check again and retry.")
     except KSEBClientError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {
@@ -524,7 +483,7 @@ from kseb_client import KSEBCaptchaError, KSEBClient, KSEBClientError
 app = Flask(__name__)
 client = KSEBClient()
 
-FIELDS = ("consumer_no", "mobile", "bill_captcha_code", "bill_session_id", "captcha_code", "unique_id")
+FIELDS = ("consumer_no", "mobile", "bill_captcha_code", "bill_session_id", "turnstile_token")
 
 
 def data_uri(image, content_type):
@@ -534,12 +493,9 @@ def data_uri(image, content_type):
 @app.get("/api/captchas")
 def get_captchas():
     bill = client.get_bill_captcha()
-    transformer = client.get_transformer_captcha()
     return jsonify({
         "bill_session_id": bill.session_id,
         "bill_captcha": data_uri(bill.image, bill.content_type),
-        "unique_id": transformer.unique_id,
-        "transformer_captcha": data_uri(transformer.image, transformer.content_type),
     })
 
 
@@ -556,11 +512,10 @@ def get_grid_capacity():
             data["mobile"],
             bill_captcha_code=data["bill_captcha_code"],
             bill_session_id=data["bill_session_id"],
-            captcha_code=data["captcha_code"],
-            unique_id=data["unique_id"],
+            turnstile_token=data["turnstile_token"],
         )
     except KSEBCaptchaError as e:
-        return {"error": f"{e} Fetch new captchas and try again."}, 422
+        return {"error": f"{e} Fetch a new captcha, complete the Turnstile check again and retry."}, 422
     except KSEBClientError as e:
         return {"error": str(e)}, 400
     return jsonify({
@@ -595,19 +550,19 @@ def main():
     with KSEBClient() as client:
         while True:
             bill = client.get_bill_captcha()
-            transformer = client.get_transformer_captcha()
             try:
                 result = client.get_grid_capacity(
                     consumer_no,
                     mobile,
                     bill_captcha_code=ask_captcha(bill.image, "bill_captcha.png", "Bill"),
                     bill_session_id=bill.session_id,
-                    captcha_code=ask_captcha(transformer.image, "transformer_captcha.png", "Transformer"),
-                    unique_id=transformer.unique_id,
+                    turnstile_token=input(
+                        "Turnstile token from https://wss.kseb.in/selfservices/reCap: "
+                    ).strip(),
                 )
                 break
             except KSEBCaptchaError as e:
-                print(f"{e} Trying again with new captchas.")
+                print(f"{e} Trying again.")
 
         print(f"Section: {result.section.section}")
         print(f"Consumer: {result.bill.consumer_name}")
@@ -630,7 +585,7 @@ from kseb_client import KSEBCaptchaError, KSEBClient, KSEBClientError
 
 client = KSEBClient()
 
-FIELDS = ("consumer_no", "mobile", "bill_captcha_code", "bill_session_id", "captcha_code", "unique_id")
+FIELDS = ("consumer_no", "mobile", "bill_captcha_code", "bill_session_id", "turnstile_token")
 
 
 def data_uri(image, content_type):
@@ -640,12 +595,9 @@ def data_uri(image, content_type):
 @require_GET
 def get_captchas(request):
     bill = client.get_bill_captcha()
-    transformer = client.get_transformer_captcha()
     return JsonResponse({
         "bill_session_id": bill.session_id,
         "bill_captcha": data_uri(bill.image, bill.content_type),
-        "unique_id": transformer.unique_id,
-        "transformer_captcha": data_uri(transformer.image, transformer.content_type),
     })
 
 
@@ -666,11 +618,10 @@ def get_grid_capacity(request):
             data["mobile"],
             bill_captcha_code=data["bill_captcha_code"],
             bill_session_id=data["bill_session_id"],
-            captcha_code=data["captcha_code"],
-            unique_id=data["unique_id"],
+            turnstile_token=data["turnstile_token"],
         )
     except KSEBCaptchaError as e:
-        return JsonResponse({"error": f"{e} Fetch new captchas and try again."}, status=422)
+        return JsonResponse({"error": f"{e} Fetch a new captcha, complete the Turnstile check again and retry."}, status=422)
     except KSEBClientError as e:
         return JsonResponse({"error": str(e)}, status=400)
     return JsonResponse({
@@ -690,7 +641,8 @@ With Django's CSRF protection on, the POST view needs a CSRF token from the fron
 
 2. **PDF Parsing**: Bill parsing works for the current KSEB PDF format. Format changes will require updates to the parser.
 
-3. **Transformer Name Matching**: Matching is case-insensitive but exact - partial matches are not supported.
+3. **Turnstile**: The transformer lookup needs a Cloudflare Turnstile token, which a person gets
+   by completing the check on the KSEB website. The SDK cannot obtain one by itself.
 
 4. **Rate Limiting**: No built-in rate limiting. KSEB may have undocumented rate limits.
 
@@ -703,16 +655,15 @@ from kseb_client import (
     KSEBClient,
     KSEBValidationError,
     KSEBCaptchaError,
+    KSEBTurnstileError,
     KSEBAuthenticationError,
-    KSEBTransformerNotFoundError,
     KSEBNetworkError,
     KSEBClientError
 )
 
 client = KSEBClient()
 bill_captcha = client.get_bill_captcha()
-transformer_captcha = client.get_transformer_captcha()
-# ... show both images to the user and collect bill_answer / transformer_answer ...
+# ... show the image to the user and collect bill_answer and turnstile_token ...
 
 try:
     result = client.get_grid_capacity(
@@ -720,21 +671,20 @@ try:
         "9895672251",
         bill_captcha_code=bill_answer,
         bill_session_id=bill_captcha.session_id,
-        captcha_code=transformer_answer,
-        unique_id=transformer_captcha.unique_id,
+        turnstile_token=turnstile_token,
     )
 except KSEBValidationError as e:
     # Handle invalid input
     print(f"Invalid input: {e.message} (field: {e.field})")
+except KSEBTurnstileError as e:
+    # Turnstile token rejected - have the person complete the Cloudflare check again
+    print(e)
 except KSEBCaptchaError as e:
-    # Wrong or expired captcha answer - fetch new captchas and ask again
+    # Wrong or expired captcha answer - fetch a new captcha and ask again
     print(f"Captcha rejected: {e}")
 except KSEBAuthenticationError as e:
     # Handle authentication failure
     print("Invalid consumer number or mobile number")
-except KSEBTransformerNotFoundError as e:
-    # Handle transformer not found
-    print(f"Transformer not available: {e.transformer_name}")
 except KSEBNetworkError as e:
     # Handle network issues (retries already attempted)
     print("Network error - please try again later")
@@ -748,27 +698,8 @@ except Exception as e:
 
 ## Performance Tips
 
-1. **Use Caching**: Transformer lists are cached for 15 minutes by default. Disable caching only if you need fresh data.
-
-```python
-# Use cache (default)
-captcha = client.get_transformer_captcha()
-transformers = client.get_transformers(
-    "1234", captcha_code=input("Captcha: ").strip(), unique_id=captcha.unique_id
-)
-
-# Bypass cache
-captcha = client.get_transformer_captcha()
-transformers = client.get_transformers(
-    "1234", use_cache=False, captcha_code=input("Captcha: ").strip(), unique_id=captcha.unique_id
-)
-
-# Clear cache manually
-client.clear_cache()
-```
-
-2. **Reuse Client**: Create one client instance and reuse it across your application to keep
-   connection pooling and the transformer cache. Captcha IDs are passed explicitly, so a shared
+1. **Reuse Client**: Create one client instance and reuse it across your application to keep
+   connection pooling. Captcha IDs and Turnstile tokens are passed explicitly, so a shared
    client is safe for concurrent users.
 
 ```python
@@ -783,7 +714,7 @@ for consumer_no in consumer_list:
     section = client.get_section(consumer_no)
 ```
 
-3. **Adjust Timeout**: Increase timeout for slower networks or during peak hours.
+2. **Adjust Timeout**: Increase timeout for slower networks or during peak hours.
 
 ```python
 client = KSEBClient(timeout=30)  # 30 seconds instead of default 15

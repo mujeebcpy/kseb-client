@@ -47,7 +47,12 @@ class BillInfo:
 
 @dataclass
 class Transformer:
-    """Information about a distribution transformer."""
+    """Information about a distribution transformer.
+
+    ``allowed_cap`` is the solar capacity KSEB allows on the transformer and
+    ``comp_cap`` the capacity already connected. KSEB no longer reports
+    registered capacity separately, so ``regi`` is 0.
+    """
 
     transformer_name: str
     division: str
@@ -56,6 +61,8 @@ class Transformer:
     comp_cap: float
     regi: float
     balance_available: float
+    capacity_kva: float | None = None
+    as_on: str | None = None
 
     def __str__(self) -> str:
         return f"Transformer(name={self.transformer_name}, balance={self.balance_available})"
@@ -80,19 +87,10 @@ class GridCapacityResult:
 
 @dataclass
 class GridCapacityOptionsResult:
-    """Section details and transformer choices when bill parsing is unavailable."""
+    """Section details and the consumer's transformer, without downloading a bill."""
 
     section: SectionInfo
     transformers: list[Transformer]
-
-
-@dataclass
-class TransformerCaptcha:
-    """Captcha challenge required by the transformer lookup endpoint."""
-
-    unique_id: str
-    image: bytes
-    content_type: str | None = None
 
 
 @dataclass
